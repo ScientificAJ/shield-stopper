@@ -5,10 +5,10 @@ Shield Stopper is a Windows "first responder" for catastrophic application hangs
 ## What It Does
 
 - Starts as a high-priority watchdog process.
-- Escalates itself to `REALTIME_PRIORITY_CLASS` whenever total CPU usage crosses the configured overload threshold.
+- Escalates itself to `REALTIME_PRIORITY_CLASS` whenever total CPU or GPU usage crosses the configured overload threshold.
 - Detects GUI hangs through `IsHungAppWindow` and `SendMessageTimeout`.
 - Gives a hung app a configurable grace period to recover.
-- Responds immediately if the grace period expires or the machine enters a critical CPU state.
+- Responds immediately if the grace period expires or the machine enters a critical CPU or GPU state.
 - Suspends the target process tree before collecting forensic artifacts.
 - Writes a JSON forensic record plus a minidump and desktop screenshot when available.
 - Force-kills the target process tree to break the lockup cycle.
@@ -38,15 +38,16 @@ Shield Stopper is a Windows "first responder" for catastrophic application hangs
    py -3 -m pip install -r requirements.txt
    ```
 
-3. Double-click `run_shield.bat` to open the GUI launcher.
-4. Press `Start Watchdog`, or use one of the CLI modes below.
+3. Double-click `run_shield.bat` to start the watchdog immediately with elevation.
+4. If you want the optional desktop launcher instead, use `run_shield.bat gui`.
 5. Review `artifacts/shield_stopper.log` and generated forensic files after an intervention.
 
 ## Easy Run Modes
 
 After a `git pull`, you do not need to remember the raw Python entrypoint. Use one of these:
 
-- GUI: double-click `run_shield.bat`
+- One-click default: `run_shield.bat`
+- GUI: `run_shield.bat gui`
 - CLI in current console: `run_shield.bat start --config config.json`
 - CLI in a new console: `run_shield.bat launch --config config.json`
 - Install check: `run_shield.bat doctor`
@@ -59,7 +60,9 @@ After a `git pull`, you do not need to remember the raw Python entrypoint. Use o
 - `poll_interval_seconds`: watchdog scan interval.
 - `grace_period_seconds`: how long an app may remain hung before intervention.
 - `high_cpu_threshold`: CPU threshold for escalating Shield Stopper to realtime scheduling.
+- `high_gpu_threshold`: GPU threshold for escalating Shield Stopper to realtime scheduling.
 - `critical_cpu_threshold`: CPU threshold that bypasses the grace period and triggers immediate action.
+- `critical_gpu_threshold`: GPU threshold that bypasses the grace period and triggers immediate action.
 - `target_process_names`: optional allowlist of process image names such as `["blender.exe", "ue4editor.exe"]`.
 - `excluded_process_names`: optional denylist.
 
@@ -68,7 +71,8 @@ After a `git pull`, you do not need to remember the raw Python entrypoint. Use o
 The included tests simulate:
 
 - escalation from high priority to realtime when the host CPU crosses the overload threshold
-- immediate intervention when CPU reaches the critical threshold
+- escalation from high priority to realtime when the host GPU crosses the overload threshold
+- immediate intervention when CPU or GPU reaches the critical threshold
 - grace-period expiry handling
 - timer reset when a process recovers before the deadline
 

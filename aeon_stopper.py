@@ -35,6 +35,7 @@ try:
     import win32api
     import win32con
     import win32gui
+    import win32pdh
     import win32process
     import win32ui
 except ImportError:  # pragma: no cover - handled in main()
@@ -42,6 +43,7 @@ except ImportError:  # pragma: no cover - handled in main()
     win32api = None
     win32con = None
     win32gui = None
+    win32pdh = None
     win32process = None
     win32ui = None
 
@@ -67,6 +69,8 @@ class ShieldConfig:
     grace_period_seconds: float = 120.0
     high_cpu_threshold: float = 95.0
     critical_cpu_threshold: float = 98.0
+    high_gpu_threshold: float = 95.0
+    critical_gpu_threshold: float = 98.0
     unresponsive_timeout_ms: int = 1000
     terminate_timeout_seconds: float = 5.0
     snapshot_dir: str = "artifacts"
@@ -83,6 +87,8 @@ class ShieldConfig:
             grace_period_seconds=float(payload.get("grace_period_seconds", 120.0)),
             high_cpu_threshold=float(payload.get("high_cpu_threshold", 95.0)),
             critical_cpu_threshold=float(payload.get("critical_cpu_threshold", 98.0)),
+            high_gpu_threshold=float(payload.get("high_gpu_threshold", 95.0)),
+            critical_gpu_threshold=float(payload.get("critical_gpu_threshold", 98.0)),
             unresponsive_timeout_ms=int(payload.get("unresponsive_timeout_ms", 1000)),
             terminate_timeout_seconds=float(payload.get("terminate_timeout_seconds", 5.0)),
             snapshot_dir=str(payload.get("snapshot_dir", "artifacts")),
@@ -106,13 +112,24 @@ class WatchState:
     last_action_at: float | None = None
 
 
+@dataclass
+class SystemLoad:
+    cpu_percent: float
+    gpu_percent: float | None = None
+
+    def summary(self) -> str:
+        if self.gpu_percent is None:
+            return f"CPU {self.cpu_percent:.1f}% / GPU unavailable"
+        return f"CPU {self.cpu_percent:.1f}% / GPU {self.gpu_percent:.1f}%"
+
+
 class PlatformAdapter:
     """Platform abstraction so the policy can be tested off Windows."""
 
     def set_self_priority(self, priority_class: int) -> None:
         raise NotImplementedError
 
-    def get_system_cpu_percent(self) -> float:
+    def get_system_load(self) -> SystemLoad:
         raise NotImplementedError
 
     def list_targets(self) -> list[TargetInfo]:
@@ -124,7 +141,7 @@ class PlatformAdapter:
     def suspend_process_tree(self, pid: int) -> None:
         raise NotImplementedError
 
-    def capture_forensics(self, target: TargetInfo, system_cpu: float, reason: str) -> dict[str, Any]:
+    def capture_forensics(self, target: TargetInfo, system_load: SystemLoad, reason: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def terminate_process_tree(self, pid: int, timeout_seconds: float) -> None:
@@ -149,15 +166,15 @@ class ShieldStopper:
 
     def step(self, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
-        system_cpu = self.adapter.get_system_cpu_percent()
-        desired_priority = self._desired_priority(system_cpu)
+        system_load = self.adapter.get_system_load()
+        desired_priority = self._desired_priority(system_load)
         if desired_priority != self.current_priority:
             self.adapter.set_self_priority(desired_priority)
             self.current_priority = desired_priority
             self.logger.info(
-                "Adjusted watchdog priority to %s at %.1f%% system CPU.",
+                "Adjusted watchdog priority to %s at %s.",
                 self._priority_name(desired_priority),
-                system_cpu,
+                system_load.summary(),
             )
 
         visible_pids: set[int] = set()
@@ -179,16 +196,13 @@ class ShieldStopper:
                     )
 
                 elapsed = now - state.hung_since
-                if system_cpu >= self.config.critical_cpu_threshold:
-                    reason = (
-                        f"critical_cpu:{system_cpu:.1f}>="
-                        f"{self.config.critical_cpu_threshold:.1f}"
-                    )
-                    self._respond(target, system_cpu, elapsed, reason)
+                critical_reason = self._critical_reason(system_load)
+                if critical_reason is not None:
+                    self._respond(target, system_load, elapsed, critical_reason)
                     self.states.pop(target.pid, None)
                 elif elapsed >= self.config.grace_period_seconds:
                     reason = f"grace_expired:{elapsed:.1f}s"
-                    self._respond(target, system_cpu, elapsed, reason)
+                    self._respond(target, system_load, elapsed, reason)
                     self.states.pop(target.pid, None)
             else:
                 if state.hung_since is not None:
@@ -202,7 +216,7 @@ class ShieldStopper:
 
         self.states = {pid: state for pid, state in self.states.items() if pid in visible_pids}
 
-    def _respond(self, target: TargetInfo, system_cpu: float, elapsed: float, reason: str) -> None:
+    def _respond(self, target: TargetInfo, system_load: SystemLoad, elapsed: float, reason: str) -> None:
         self.logger.error(
             "Intervening on %s (PID %s) after %.1fs hung state; reason=%s.",
             target.name,
@@ -217,7 +231,7 @@ class ShieldStopper:
 
         artifact_summary: dict[str, Any] = {"error": "forensics_not_collected"}
         try:
-            artifact_summary = self.adapter.capture_forensics(target, system_cpu, reason)
+            artifact_summary = self.adapter.capture_forensics(target, system_load, reason)
         except Exception as exc:
             artifact_summary = {"error": str(exc)}
             self.logger.exception("Forensics failed for PID %s: %s", target.pid, exc)
@@ -230,10 +244,26 @@ class ShieldStopper:
             return
         self.logger.error("Forced termination complete for PID %s.", target.pid)
 
-    def _desired_priority(self, system_cpu: float) -> int:
-        if system_cpu >= self.config.high_cpu_threshold:
+    def _desired_priority(self, system_load: SystemLoad) -> int:
+        if system_load.cpu_percent >= self.config.high_cpu_threshold:
+            return REALTIME_PRIORITY_CLASS
+        if system_load.gpu_percent is not None and system_load.gpu_percent >= self.config.high_gpu_threshold:
             return REALTIME_PRIORITY_CLASS
         return HIGH_PRIORITY_CLASS
+
+    def _critical_reason(self, system_load: SystemLoad) -> str | None:
+        reasons: list[str] = []
+        if system_load.cpu_percent >= self.config.critical_cpu_threshold:
+            reasons.append(
+                f"critical_cpu:{system_load.cpu_percent:.1f}>={self.config.critical_cpu_threshold:.1f}"
+            )
+        if system_load.gpu_percent is not None and system_load.gpu_percent >= self.config.critical_gpu_threshold:
+            reasons.append(
+                f"critical_gpu:{system_load.gpu_percent:.1f}>={self.config.critical_gpu_threshold:.1f}"
+            )
+        if not reasons:
+            return None
+        return ",".join(reasons)
 
     def _priority_name(self, priority_class: int) -> str:
         if priority_class == REALTIME_PRIORITY_CLASS:
@@ -263,6 +293,7 @@ class WindowsPlatformAdapter(PlatformAdapter):
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
         self.dbghelp = ctypes.WinDLL("DbgHelp", use_last_error=True)
+        self.gpu_sampler = GPUCounterSampler(logger)
         self._configure_win32_calls()
 
     def _configure_win32_calls(self) -> None:
@@ -309,8 +340,11 @@ class WindowsPlatformAdapter(PlatformAdapter):
         if not self.kernel32.SetPriorityClass(handle, priority_class):
             raise ctypes.WinError(ctypes.get_last_error())
 
-    def get_system_cpu_percent(self) -> float:
-        return float(psutil.cpu_percent(interval=None))
+    def get_system_load(self) -> SystemLoad:
+        return SystemLoad(
+            cpu_percent=float(psutil.cpu_percent(interval=None)),
+            gpu_percent=self.gpu_sampler.sample(),
+        )
 
     def list_targets(self) -> list[TargetInfo]:
         window_map: dict[int, list[int]] = {}
@@ -357,14 +391,14 @@ class WindowsPlatformAdapter(PlatformAdapter):
             except Exception as exc:  # pragma: no cover - Windows only
                 self.logger.warning("Unable to suspend PID %s: %s", target_pid, exc)
 
-    def capture_forensics(self, target: TargetInfo, system_cpu: float, reason: str) -> dict[str, Any]:
+    def capture_forensics(self, target: TargetInfo, system_load: SystemLoad, reason: str) -> dict[str, Any]:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         stem = f"{target.name}_{target.pid}_{timestamp}".replace(" ", "_")
         metadata_path = self.snapshot_dir / f"{stem}.json"
         dump_path = self.snapshot_dir / f"{stem}.dmp"
         screenshot_path = self.snapshot_dir / f"{stem}.bmp"
 
-        snapshot = self._snapshot_metadata(target, system_cpu, reason)
+        snapshot = self._snapshot_metadata(target, system_load, reason)
         if self.config.minidump_enabled:
             try:
                 self._write_minidump(target.pid, dump_path)
@@ -446,7 +480,7 @@ class WindowsPlatformAdapter(PlatformAdapter):
         finally:
             self.kernel32.CloseHandle(handle)
 
-    def _snapshot_metadata(self, target: TargetInfo, system_cpu: float, reason: str) -> dict[str, Any]:
+    def _snapshot_metadata(self, target: TargetInfo, system_load: SystemLoad, reason: str) -> dict[str, Any]:
         process = psutil.Process(target.pid)
         with process.oneshot():
             memory_info = process.memory_info()
@@ -468,7 +502,8 @@ class WindowsPlatformAdapter(PlatformAdapter):
             "reason": reason,
             "pid": target.pid,
             "name": target.name,
-            "system_cpu_percent": system_cpu,
+            "system_cpu_percent": system_load.cpu_percent,
+            "system_gpu_percent": system_load.gpu_percent,
             "process_cpu_percent": cpu_percent,
             "rss_bytes": memory_info.rss,
             "vms_bytes": memory_info.vms,
@@ -537,6 +572,96 @@ class WindowsPlatformAdapter(PlatformAdapter):
         mem_dc.DeleteDC()
         img_dc.DeleteDC()
         win32gui.ReleaseDC(desktop_hwnd, desktop_dc)
+
+
+class GPUCounterSampler:
+    """Samples aggregate GPU engine utilization via Windows performance counters."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self.logger = logger
+        self.query: Any | None = None
+        self.counters: list[tuple[str, Any]] = []
+        self.warning_emitted = False
+        self._initialize_query()
+
+    def sample(self) -> float | None:
+        if win32pdh is None or self.query is None or not self.counters:
+            return None
+
+        sampled = self._sample_once()
+        if sampled is not None:
+            return sampled
+
+        self._initialize_query()
+        return self._sample_once()
+
+    def _initialize_query(self) -> None:
+        self._close_query()
+        if win32pdh is None:
+            self._warn_once("win32pdh is unavailable; GPU utilization will be omitted.")
+            return
+
+        try:
+            self.query = win32pdh.OpenQuery()
+            _, instances = win32pdh.EnumObjectItems(None, None, "GPU Engine", win32pdh.PERF_DETAIL_WIZARD)
+            self.counters = []
+            for instance in instances:
+                if instance == "_Total":
+                    continue
+                path = win32pdh.MakeCounterPath(
+                    (None, "GPU Engine", instance, None, -1, "Utilization Percentage")
+                )
+                counter = win32pdh.AddCounter(self.query, path)
+                self.counters.append((instance, counter))
+            if self.counters:
+                win32pdh.CollectQueryData(self.query)
+            else:
+                self._warn_once("GPU performance counters are unavailable; GPU utilization will be omitted.")
+        except Exception as exc:  # pragma: no cover - Windows only
+            self._warn_once(f"GPU performance counter setup failed: {exc}")
+            self._close_query()
+
+    def _sample_once(self) -> float | None:
+        try:
+            win32pdh.CollectQueryData(self.query)
+            totals_by_engine: dict[str, float] = {}
+            for instance, counter in self.counters:
+                _, value = win32pdh.GetFormattedCounterValue(counter, win32pdh.PDH_FMT_DOUBLE)
+                if value < 0:
+                    continue
+                engine_type = self._engine_type(instance)
+                totals_by_engine[engine_type] = totals_by_engine.get(engine_type, 0.0) + float(value)
+            if not totals_by_engine:
+                return 0.0
+            return min(100.0, max(totals_by_engine.values()))
+        except Exception as exc:  # pragma: no cover - Windows only
+            self._warn_once(f"GPU utilization sample failed: {exc}")
+            return None
+
+    def _engine_type(self, instance: str) -> str:
+        marker = "engtype_"
+        if marker not in instance:
+            return "unknown"
+        return instance.split(marker, 1)[1]
+
+    def _close_query(self) -> None:
+        if self.query is None or win32pdh is None:
+            self.query = None
+            self.counters = []
+            return
+        try:
+            win32pdh.CloseQuery(self.query)
+        except Exception:  # pragma: no cover - Windows only
+            pass
+        finally:
+            self.query = None
+            self.counters = []
+
+    def _warn_once(self, message: str) -> None:
+        if self.warning_emitted:
+            return
+        self.warning_emitted = True
+        self.logger.warning(message)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

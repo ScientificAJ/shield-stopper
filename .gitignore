@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 artifacts/
 .pytest_cache/
+shield_code_dump_temp.txt

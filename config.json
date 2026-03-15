@@ -3,6 +3,8 @@
   "grace_period_seconds": 120,
   "high_cpu_threshold": 95,
   "critical_cpu_threshold": 98,
+  "high_gpu_threshold": 95,
+  "critical_gpu_threshold": 98,
   "unresponsive_timeout_ms": 1000,
   "terminate_timeout_seconds": 5,
   "snapshot_dir": "artifacts",

@@ -59,8 +59,8 @@ def print_doctor_report(config_path: Path) -> int:
             artifact_dir = (ROOT_DIR / config.snapshot_dir).resolve()
             print(f"Artifacts: {artifact_dir}")
             print(f"Grace period: {config.grace_period_seconds}s")
-            print(f"Realtime threshold: {config.high_cpu_threshold}%")
-            print(f"Critical threshold: {config.critical_cpu_threshold}%")
+            print(f"Realtime thresholds: CPU {config.high_cpu_threshold}% / GPU {config.high_gpu_threshold}%")
+            print(f"Critical thresholds: CPU {config.critical_cpu_threshold}% / GPU {config.critical_gpu_threshold}%")
         except Exception as exc:
             print(f"Config load: failed ({exc})")
             return 1
@@ -192,8 +192,8 @@ def capture_doctor_report(config_path: Path) -> list[str]:
             [
                 f"Artifacts: {(ROOT_DIR / config.snapshot_dir).resolve()}",
                 f"Grace period: {config.grace_period_seconds}s",
-                f"Realtime threshold: {config.high_cpu_threshold}%",
-                f"Critical threshold: {config.critical_cpu_threshold}%",
+                f"Realtime thresholds: CPU {config.high_cpu_threshold}% / GPU {config.high_gpu_threshold}%",
+                f"Critical thresholds: CPU {config.critical_cpu_threshold}% / GPU {config.critical_gpu_threshold}%",
             ]
         )
     return lines

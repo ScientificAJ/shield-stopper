@@ -38,6 +38,8 @@ py -3 -m pip install -r requirements.txt
 Open `config.json` and adjust:
 
 - `grace_period_seconds` if you want a shorter or longer wait.
+- `high_cpu_threshold` and `high_gpu_threshold` for realtime escalation.
+- `critical_cpu_threshold` and `critical_gpu_threshold` for emergency bypass.
 - `target_process_names` if you want to only monitor specific heavy apps.
 - `excluded_process_names` if you never want certain processes touched.
 - `snapshot_dir` if you want forensic output in a different folder.
@@ -52,22 +54,27 @@ If `target_process_names` is left empty, Shield Stopper watches all visible GUI 
 
 ## 6. Start the Watchdog
 
-The recommended entrypoint is `run_shield.bat`. It now opens a simple GUI by default and still supports CLI modes.
+The recommended entrypoint is `run_shield.bat`. It starts the watchdog immediately by default and still supports GUI and CLI modes.
 
 1. Double-click `run_shield.bat`.
 2. Accept the Windows UAC prompt.
-3. In the GUI, click `Start Watchdog`.
-4. Leave the watchdog console window open while Shield Stopper is active.
+3. Leave the watchdog console window open while Shield Stopper is active.
 
 The batch file re-launches itself with elevation automatically, then starts the launcher:
 
 ```powershell
-py -3 shield_launcher.py gui --config config.json
+py -3 shield_launcher.py start --config config.json
 ```
 
 ### CLI options
 
-If you prefer the terminal, use:
+If you want the GUI instead of immediate startup, use:
+
+```powershell
+run_shield.bat gui
+```
+
+If you prefer the terminal explicitly, use:
 
 ```powershell
 run_shield.bat start --config config.json
@@ -93,7 +100,7 @@ py -3 shield_launcher.py start --config config.json
 1. Shield Stopper detects an unresponsive GUI window.
 2. A grace timer starts.
 3. If the app recovers, the timer resets.
-4. If the timer expires or total CPU hits the critical threshold:
+4. If the timer expires or total CPU or GPU hits the critical threshold:
    - the process tree is suspended
    - forensic data is written
    - a minidump and screenshot are attempted

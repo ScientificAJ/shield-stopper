@@ -6,6 +6,7 @@ from aeon_stopper import (
     REALTIME_PRIORITY_CLASS,
     ShieldConfig,
     ShieldStopper,
+    SystemLoad,
     TargetInfo,
 )
 
@@ -13,6 +14,7 @@ from aeon_stopper import (
 class FakeAdapter:
     def __init__(self) -> None:
         self.system_cpu = 10.0
+        self.system_gpu = None
         self.targets = [TargetInfo(pid=101, name="game.exe", hwnds=[1])]
         self.hung = False
         self.priority_calls = []
@@ -23,8 +25,8 @@ class FakeAdapter:
     def set_self_priority(self, priority_class: int) -> None:
         self.priority_calls.append(priority_class)
 
-    def get_system_cpu_percent(self) -> float:
-        return self.system_cpu
+    def get_system_load(self) -> SystemLoad:
+        return SystemLoad(cpu_percent=self.system_cpu, gpu_percent=self.system_gpu)
 
     def list_targets(self):
         return list(self.targets)
@@ -35,8 +37,13 @@ class FakeAdapter:
     def suspend_process_tree(self, pid: int) -> None:
         self.suspend_calls.append(pid)
 
-    def capture_forensics(self, target: TargetInfo, system_cpu: float, reason: str):
-        payload = {"pid": target.pid, "cpu": system_cpu, "reason": reason}
+    def capture_forensics(self, target: TargetInfo, system_load: SystemLoad, reason: str):
+        payload = {
+            "pid": target.pid,
+            "cpu": system_load.cpu_percent,
+            "gpu": system_load.gpu_percent,
+            "reason": reason,
+        }
         self.capture_calls.append(payload)
         return payload
 
@@ -68,6 +75,12 @@ class ShieldStopperTests(unittest.TestCase):
         self.stopper.step(now=0.0)
         self.assertEqual(self.adapter.priority_calls[-1], REALTIME_PRIORITY_CLASS)
 
+    def test_escalates_to_realtime_above_gpu_threshold(self) -> None:
+        self.adapter.system_cpu = 40.0
+        self.adapter.system_gpu = 97.0
+        self.stopper.step(now=0.0)
+        self.assertEqual(self.adapter.priority_calls[-1], REALTIME_PRIORITY_CLASS)
+
     def test_critical_cpu_triggers_immediate_intervention(self) -> None:
         self.adapter.system_cpu = 99.0
         self.adapter.hung = True
@@ -75,6 +88,15 @@ class ShieldStopperTests(unittest.TestCase):
         self.assertEqual(self.adapter.suspend_calls, [101])
         self.assertEqual(self.adapter.terminate_calls, [101])
         self.assertEqual(self.adapter.capture_calls[0]["reason"], "critical_cpu:99.0>=98.0")
+
+    def test_critical_gpu_triggers_immediate_intervention(self) -> None:
+        self.adapter.system_cpu = 40.0
+        self.adapter.system_gpu = 99.0
+        self.adapter.hung = True
+        self.stopper.step(now=0.0)
+        self.assertEqual(self.adapter.suspend_calls, [101])
+        self.assertEqual(self.adapter.terminate_calls, [101])
+        self.assertEqual(self.adapter.capture_calls[0]["reason"], "critical_gpu:99.0>=98.0")
 
     def test_grace_period_expiry_triggers_intervention(self) -> None:
         self.adapter.system_cpu = 60.0
