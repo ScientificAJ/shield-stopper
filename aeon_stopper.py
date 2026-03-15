@@ -539,14 +539,14 @@ class WindowsPlatformAdapter(PlatformAdapter):
         win32gui.ReleaseDC(desktop_hwnd, desktop_dc)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Shield Stopper process watchdog")
     parser.add_argument(
         "--config",
         default=DEFAULT_CONFIG_PATH,
         help="Path to config.json (default: config.json)",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def setup_logger(log_path: Path) -> logging.Logger:
@@ -576,9 +576,7 @@ def ensure_windows_runtime() -> None:
         raise RuntimeError("Shield Stopper must be started with Administrator privileges.")
 
 
-def main() -> int:
-    args = parse_args()
-    config_path = Path(args.config).resolve()
+def run_watchdog(config_path: Path) -> int:
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
@@ -603,6 +601,12 @@ def main() -> int:
         return 1
 
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config_path = Path(args.config).resolve()
+    return run_watchdog(config_path)
 
 
 if __name__ == "__main__":

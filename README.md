@@ -16,6 +16,7 @@ Shield Stopper is a Windows "first responder" for catastrophic application hangs
 ## Repository Layout
 
 - `aeon_stopper.py`: main watchdog implementation and Windows adapter.
+- `shield_launcher.py`: friendly GUI and CLI launcher.
 - `run_shield.bat`: UAC-aware launcher for end users.
 - `config.json`: runtime thresholds and target selection.
 - `requirements.txt`: Python dependencies.
@@ -37,8 +38,19 @@ Shield Stopper is a Windows "first responder" for catastrophic application hangs
    py -3 -m pip install -r requirements.txt
    ```
 
-3. Double-click `run_shield.bat` or launch it from an elevated terminal.
-4. Review `artifacts/shield_stopper.log` and generated forensic files after an intervention.
+3. Double-click `run_shield.bat` to open the GUI launcher.
+4. Press `Start Watchdog`, or use one of the CLI modes below.
+5. Review `artifacts/shield_stopper.log` and generated forensic files after an intervention.
+
+## Easy Run Modes
+
+After a `git pull`, you do not need to remember the raw Python entrypoint. Use one of these:
+
+- GUI: double-click `run_shield.bat`
+- CLI in current console: `run_shield.bat start --config config.json`
+- CLI in a new console: `run_shield.bat launch --config config.json`
+- Install check: `run_shield.bat doctor`
+- Direct Python CLI: `python shield_launcher.py start --config config.json`
 
 ## Configuration
 

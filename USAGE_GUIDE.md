@@ -52,16 +52,40 @@ If `target_process_names` is left empty, Shield Stopper watches all visible GUI 
 
 ## 6. Start the Watchdog
 
-The recommended launcher is `run_shield.bat`.
+The recommended entrypoint is `run_shield.bat`. It now opens a simple GUI by default and still supports CLI modes.
 
 1. Double-click `run_shield.bat`.
 2. Accept the Windows UAC prompt.
-3. Leave the console window open while Shield Stopper is active.
+3. In the GUI, click `Start Watchdog`.
+4. Leave the watchdog console window open while Shield Stopper is active.
 
-The batch file re-launches itself with elevation automatically, then starts:
+The batch file re-launches itself with elevation automatically, then starts the launcher:
 
 ```powershell
-py -3 aeon_stopper.py --config config.json
+py -3 shield_launcher.py gui --config config.json
+```
+
+### CLI options
+
+If you prefer the terminal, use:
+
+```powershell
+run_shield.bat start --config config.json
+```
+
+Other useful modes:
+
+```powershell
+run_shield.bat launch --config config.json
+run_shield.bat doctor
+run_shield.bat open-config
+run_shield.bat open-artifacts
+```
+
+You can also run the launcher directly after a `git pull`:
+
+```powershell
+py -3 shield_launcher.py start --config config.json
 ```
 
 ## 7. What Happens During a Hang
