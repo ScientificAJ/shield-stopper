@@ -1,133 +1,167 @@
-# Shield Stopper Usage Guide
+# Shield Stopper V2 Usage Guide
 
-## 1. Prerequisites
+## 1. Supported Platforms
 
-- Windows 10 or Windows 11
-- Administrator rights on the machine
-- Python 3.11 or newer
+- Windows 10 / 11
+- Linux with Python 3.11+
+- macOS with Python 3.11+
 
-## 2. Install Python
+Shield Stopper expects elevated privileges on every platform because suspension, dumping, and forced termination often fail without them.
 
-1. Download Python from https://www.python.org/downloads/windows/
-2. During installation, enable `Add python.exe to PATH`.
-3. Open `Command Prompt` and verify:
+## 2. Install Python Dependencies
 
-   ```powershell
-   py -3 --version
-   ```
-
-## 3. Get the Project
-
-1. Download the repository ZIP from GitHub and extract it, or clone it:
-
-   ```powershell
-   git clone <your-repo-url>
-   cd shielder
-   ```
-
-## 4. Install Dependencies
-
-Run:
+### Windows
 
 ```powershell
 py -3 -m pip install -r requirements.txt
 ```
 
-## 5. Configure What Shield Stopper Watches
+### Linux / macOS
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+`requirements.txt` now uses environment markers, so `pywin32` is only installed on Windows.
+
+## 3. Optional Native Tools
+
+For the best forensic coverage, install the native tools your platform supports.
+
+### Linux
+
+- `wmctrl`
+- `xprop`
+- `gcore`
+- `scrot` or `gnome-screenshot` or `import` or `grim`
+
+### macOS
+
+- `osascript`
+- `lldb`
+- `screencapture`
+
+### Windows
+
+- No extra native package install is required beyond Python + `pywin32`
+
+## 4. Configure the Watchdog
 
 Open `config.json` and adjust:
 
-- `grace_period_seconds` if you want a shorter or longer wait.
-- `high_cpu_threshold` and `high_gpu_threshold` for realtime escalation.
-- `critical_cpu_threshold` and `critical_gpu_threshold` for emergency bypass.
-- `target_process_names` if you want to only monitor specific heavy apps.
-- `excluded_process_names` if you never want certain processes touched.
-- `snapshot_dir` if you want forensic output in a different folder.
+- `grace_period_seconds`
+- `high_cpu_threshold`
+- `critical_cpu_threshold`
+- `high_gpu_threshold`
+- `critical_gpu_threshold`
+- `target_process_names`
+- `excluded_process_names`
+- `minidump_enabled`
+- `screenshot_enabled`
+- `full_memory_dumps`
+
+Important:
+
+- `full_memory_dumps` defaults to `false`
+- Leave it `false` unless you intentionally want very large Windows dump files
 
 Example allowlist:
 
 ```json
-"target_process_names": ["blender.exe", "eldenring.exe", "ue4editor.exe"]
+"target_process_names": ["blender.exe", "cyberpunk2077.exe", "ue4editor.exe"]
 ```
 
-If `target_process_names` is left empty, Shield Stopper watches all visible GUI processes except itself.
+## 5. Start Shield Stopper
 
-## 6. Start the Watchdog
+### Windows
 
-The recommended entrypoint is `run_shield.bat`. It starts the watchdog immediately by default and still supports GUI and CLI modes.
+Use the bundled batch launcher:
 
-1. Double-click `run_shield.bat`.
-2. Accept the Windows UAC prompt.
-3. Leave the watchdog console window open while Shield Stopper is active.
+```powershell
+run_shield.bat
+```
 
-The batch file re-launches itself with elevation automatically, then starts the launcher:
+It automatically re-launches itself with UAC elevation and starts:
 
 ```powershell
 py -3 shield_launcher.py start --config config.json
 ```
 
-### CLI options
-
-If you want the GUI instead of immediate startup, use:
+If you want the optional GUI launcher instead:
 
 ```powershell
 run_shield.bat gui
 ```
 
-If you prefer the terminal explicitly, use:
+### Linux / macOS
 
-```powershell
-run_shield.bat start --config config.json
+Use the bundled shell launcher:
+
+```bash
+./run_shield.sh
 ```
 
-Other useful modes:
+It automatically re-launches itself with `sudo` when needed and starts:
 
-```powershell
-run_shield.bat launch --config config.json
-run_shield.bat doctor
-run_shield.bat open-config
-run_shield.bat open-artifacts
+```bash
+python3 shield_launcher.py start --config config.json
 ```
 
-You can also run the launcher directly after a `git pull`:
+If you want the optional GUI launcher instead:
 
-```powershell
-py -3 shield_launcher.py start --config config.json
+```bash
+./run_shield.sh gui
+```
+
+## 6. CLI Modes
+
+You can also invoke the launcher directly:
+
+```bash
+python3 shield_launcher.py start --config config.json
+python3 shield_launcher.py launch --config config.json
+python3 shield_launcher.py gui --config config.json
+python3 shield_launcher.py doctor
+python3 shield_launcher.py open-config
+python3 shield_launcher.py open-artifacts
 ```
 
 ## 7. What Happens During a Hang
 
-1. Shield Stopper detects an unresponsive GUI window.
-2. A grace timer starts.
-3. If the app recovers, the timer resets.
-4. If the timer expires or total CPU or GPU hits the critical threshold:
-   - the process tree is suspended
-   - forensic data is written
-   - a minidump and screenshot are attempted
-   - the process tree is force-killed
+1. Shield Stopper finds a target process it is allowed to monitor.
+2. It checks whether the process appears unresponsive using the current platform adapter.
+3. If the process recovers, the timer resets.
+4. If the grace period expires, or CPU / GPU crosses the critical threshold:
+   - the target process tree is suspended
+   - forensic metadata is written
+   - native dump capture is attempted
+   - screenshot capture is attempted
+   - the target process tree is force-killed
 
-## 8. Where Forensics Are Stored
+## 8. Artifact Output
 
-By default, artifacts are written under `artifacts/`:
+Artifacts are written under `artifacts/` by default:
 
 - `shield_stopper.log`
 - `*.json` metadata snapshots
-- `*.dmp` minidumps
-- `*.bmp` desktop screenshots
+- Windows: `*.dmp`
+- Linux: `gcore` output such as `*.PID`
+- macOS: `*.core` when `lldb` succeeds
+- screenshots when platform tools are available
 
-## 9. Validate the Realtime Escalation Path
+## 9. Verify the Install
 
-Run the included simulation tests:
+Run:
 
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
-On a real Windows machine, you should also test with a sacrificial GUI application before trusting the tool in production.
+This validates the cross-platform policy and adapter behavior through simulation.
 
 ## 10. Operational Advice
 
-- Start with a short allowlist of known heavy applications.
-- Do not point the tool at system-critical Windows processes.
-- Review artifacts after each intervention to confirm the target and timing were correct.
-- If minidump generation fails for protected processes, the JSON metadata and screenshot still provide a forensic trail.
+- Start with an allowlist of known heavy apps instead of watching every process on day one.
+- Keep `full_memory_dumps` disabled unless you explicitly need full-memory crash forensics.
+- Validate the platform-specific tooling on each OS before trusting it in production.
+- Do not point Shield Stopper at critical operating-system services.

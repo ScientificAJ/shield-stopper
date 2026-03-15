@@ -1,80 +1,155 @@
-# Shield Stopper
+# Shield Stopper V2
 
-Shield Stopper is a Windows "first responder" for catastrophic application hangs. Instead of leaving you to fight Task Manager while the machine is stuttering, it watches GUI processes, waits through a configurable grace period, captures forensics, and escalates its own scheduling priority so it can still shut down the offending process tree when the system is close to locking up.
+Shield Stopper is a cross-platform watchdog for catastrophic application hangs. It watches user-facing processes, gives them a short recovery window, captures forensic artifacts, and force-terminates the process tree when the machine is sliding toward a lockup.
 
-## What It Does
+V2 keeps the native Windows implementation, fixes the dump-size and GPU-localization edge cases, and adds Linux and macOS adapters through the same `PlatformAdapter` architecture.
 
-- Starts as a high-priority watchdog process.
-- Escalates itself to `REALTIME_PRIORITY_CLASS` whenever total CPU or GPU usage crosses the configured overload threshold.
-- Detects GUI hangs through `IsHungAppWindow` and `SendMessageTimeout`.
-- Gives a hung app a configurable grace period to recover.
-- Responds immediately if the grace period expires or the machine enters a critical CPU or GPU state.
-- Suspends the target process tree before collecting forensic artifacts.
-- Writes a JSON forensic record plus a minidump and desktop screenshot when available.
-- Force-kills the target process tree to break the lockup cycle.
+## Highlights
+
+- OS-agnostic watchdog policy in `aeon_stopper.py`
+- Native platform adapters for Windows, Linux, and macOS
+- Adaptive priority escalation on overload
+- Grace-period reset if the target recovers
+- Immediate intervention on critical CPU or GPU load
+- Process-tree suspension before forensics
+- Forced process-tree termination after artifact capture
+
+## V2 Fixes
+
+### Adaptive Windows Minidumps
+
+The default dump mode is now `MiniDumpNormal` instead of `MiniDumpWithFullMemory`.
+
+- Default: small stack-oriented dumps
+- Opt-in: set `"full_memory_dumps": true` in `config.json` if you explicitly want full memory dumps
+
+This prevents a hung 12 GB game from immediately writing a 12 GB `.dmp` file by default.
+
+### Locale-Aware Windows GPU Counters
+
+Windows GPU monitoring now resolves localized performance counter names instead of assuming the literal English string `GPU Engine`.
+
+- The adapter reads the English counter index from `Perflib\\009`
+- It then uses `PdhLookupPerfNameByIndexW` to resolve the localized object and counter names
+
+That keeps GPU-triggered escalation working on non-English Windows installs.
+
+## Platform Behavior
+
+### Windows
+
+- Hang checks: `IsHungAppWindow` and `SendMessageTimeout`
+- Priority: `HIGH_PRIORITY_CLASS` by default, `REALTIME_PRIORITY_CLASS` on overload
+- Forensics: Win32 minidump plus desktop screenshot
+- Suspension: `NtSuspendProcess`
+- Termination: forced process-tree kill via `psutil`
+
+### Linux
+
+- Hang checks: X11 probing through `wmctrl` and `xprop` when available, plus `/proc/<pid>/stat` detection for `D` state
+- Priority: aggressive `nice` / `sched_setscheduler` where allowed
+- Forensics: `gcore` for native dumps when available, screenshot via `scrot` / `gnome-screenshot` / `import` / `grim`
+- Suspension: `SIGSTOP`
+- Termination: `SIGKILL`
+
+### macOS
+
+- Hang checks: AppleScript / `System Events` timeout probing, plus process-state fallback
+- Priority: elevated `nice` values where permitted
+- Forensics: `lldb` core-save attempt, screenshot via `screencapture`
+- Suspension: `SIGSTOP`
+- Termination: `SIGKILL`
 
 ## Repository Layout
 
-- `aeon_stopper.py`: main watchdog implementation and Windows adapter.
-- `shield_launcher.py`: friendly GUI and CLI launcher.
-- `run_shield.bat`: UAC-aware launcher for end users.
-- `config.json`: runtime thresholds and target selection.
-- `requirements.txt`: Python dependencies.
-- `USAGE_GUIDE.md`: install and launch instructions.
-- `tests/test_aeon_stopper.py`: simulation-based verification for escalation and grace-period behavior.
-
-## Safety Notes
-
-- `REALTIME_PRIORITY_CLASS` is intentionally aggressive. Shield Stopper only switches to it while the machine is already in an overload state, then drops back to `HIGH_PRIORITY_CLASS` when CPU pressure subsides.
-- Administrator privileges are required because suspension, dumping, and process-tree termination on third-party processes can otherwise fail.
-- The default configuration monitors visible GUI processes. If you want to limit intervention to known heavy applications, populate `target_process_names` in `config.json`.
+- `aeon_stopper.py`: watchdog core plus platform adapters
+- `shield_launcher.py`: GUI and CLI launcher
+- `run_shield.bat`: elevated Windows launcher
+- `run_shield.sh`: elevated Linux/macOS launcher
+- `config.json`: thresholds and runtime behavior
+- `requirements.txt`: environment-marked Python dependencies
+- `USAGE_GUIDE.md`: step-by-step install and run guide
+- `tests/`: simulation and adapter tests
 
 ## Quick Start
 
-1. Install Python 3.11+ on Windows.
+### Windows
+
+1. Install Python 3.11+
 2. Install dependencies:
 
    ```powershell
    py -3 -m pip install -r requirements.txt
    ```
 
-3. Double-click `run_shield.bat` to start the watchdog immediately with elevation.
-4. If you want the optional desktop launcher instead, use `run_shield.bat gui`.
-5. Review `artifacts/shield_stopper.log` and generated forensic files after an intervention.
+3. Double-click `run_shield.bat`
 
-## Easy Run Modes
+### Linux / macOS
 
-After a `git pull`, you do not need to remember the raw Python entrypoint. Use one of these:
+1. Install Python 3.11+
+2. Install dependencies:
 
-- One-click default: `run_shield.bat`
-- GUI: `run_shield.bat gui`
-- CLI in current console: `run_shield.bat start --config config.json`
-- CLI in a new console: `run_shield.bat launch --config config.json`
-- Install check: `run_shield.bat doctor`
-- Direct Python CLI: `python shield_launcher.py start --config config.json`
+   ```bash
+   python3 -m pip install -r requirements.txt
+   ```
+
+3. Launch:
+
+   ```bash
+   ./run_shield.sh
+   ```
+
+The shell launcher auto-reexecs with `sudo` when required.
+
+## Optional Native Tools
+
+Shield Stopper works best when these native tools are available:
+
+- Linux: `wmctrl`, `xprop`, `gcore`, `scrot`, `gnome-screenshot`, `import`, or `grim`
+- macOS: `osascript`, `lldb`, `screencapture`
+
+The watchdog degrades gracefully when a platform-specific forensic tool is missing.
 
 ## Configuration
 
 `config.json` controls:
 
-- `poll_interval_seconds`: watchdog scan interval.
-- `grace_period_seconds`: how long an app may remain hung before intervention.
-- `high_cpu_threshold`: CPU threshold for escalating Shield Stopper to realtime scheduling.
-- `high_gpu_threshold`: GPU threshold for escalating Shield Stopper to realtime scheduling.
-- `critical_cpu_threshold`: CPU threshold that bypasses the grace period and triggers immediate action.
-- `critical_gpu_threshold`: GPU threshold that bypasses the grace period and triggers immediate action.
-- `target_process_names`: optional allowlist of process image names such as `["blender.exe", "ue4editor.exe"]`.
-- `excluded_process_names`: optional denylist.
+- `poll_interval_seconds`
+- `grace_period_seconds`
+- `high_cpu_threshold`
+- `critical_cpu_threshold`
+- `high_gpu_threshold`
+- `critical_gpu_threshold`
+- `target_process_names`
+- `excluded_process_names`
+- `minidump_enabled`
+- `screenshot_enabled`
+- `full_memory_dumps`
+
+## Run Modes
+
+The launcher supports both GUI and CLI usage:
+
+- Current console: `python shield_launcher.py start --config config.json`
+- Detached launch: `python shield_launcher.py launch --config config.json`
+- GUI launcher: `python shield_launcher.py gui --config config.json`
+- Environment check: `python shield_launcher.py doctor`
+
+On Windows, `run_shield.bat` defaults to `start`.
+On Linux and macOS, `run_shield.sh` defaults to `start`.
 
 ## Verification
 
-The included tests simulate:
+The included tests verify:
 
-- escalation from high priority to realtime when the host CPU crosses the overload threshold
-- escalation from high priority to realtime when the host GPU crosses the overload threshold
-- immediate intervention when CPU or GPU reaches the critical threshold
-- grace-period expiry handling
-- timer reset when a process recovers before the deadline
+- CPU and GPU threshold escalation
+- emergency intervention behavior
+- grace-period reset behavior
+- adaptive Windows dump-type selection
+- Linux `SIGKILL` behavior
+- Linux `D`-state hang detection
+- macOS timeout-based hang detection
+- launcher path resolution and command building
 
 Run them with:
 
@@ -82,11 +157,10 @@ Run them with:
 python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
-## GitHub Launch Checklist
+## Current Validation Scope
 
-1. Initialize the repository and commit the files.
-2. Create a GitHub repository.
-3. Push the default branch.
-4. Tag a release after you validate on a Windows machine with administrative rights.
+This repository now contains working cross-platform adapters and simulation coverage, but this environment can only execute Linux-hosted tests. The Windows and macOS adapter paths were validated by unit tests and static checks here, not by live end-to-end execution on native Windows and macOS hosts.
 
-Shield Stopper is released under the MIT License.
+## License
+
+MIT

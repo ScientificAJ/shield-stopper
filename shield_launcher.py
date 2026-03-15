@@ -7,6 +7,7 @@ import argparse
 import ctypes
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,9 +30,9 @@ def build_watchdog_command(config_path: Path) -> list[str]:
     return [sys.executable, str(WATCHDOG_SCRIPT), "--config", str(config_path)]
 
 
-def is_windows_admin() -> bool:
+def has_required_privileges() -> bool:
     if os.name != "nt":
-        return False
+        return not hasattr(os, "geteuid") or os.geteuid() == 0
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
@@ -49,7 +50,7 @@ def print_doctor_report(config_path: Path) -> int:
     print(f"Config: {config_path}")
     print(f"Config exists: {'yes' if config_path.exists() else 'no'}")
     print(f"Platform: {os.name}")
-    print(f"Administrator: {'yes' if is_windows_admin() else 'no'}")
+    print(f"Privileges ready: {'yes' if has_required_privileges() else 'no'}")
     print(f"psutil installed: {'yes' if dependency_available('psutil') else 'no'}")
     print(f"pywin32 installed: {'yes' if dependency_available('win32gui') else 'no'}")
 
@@ -61,6 +62,7 @@ def print_doctor_report(config_path: Path) -> int:
             print(f"Grace period: {config.grace_period_seconds}s")
             print(f"Realtime thresholds: CPU {config.high_cpu_threshold}% / GPU {config.high_gpu_threshold}%")
             print(f"Critical thresholds: CPU {config.critical_cpu_threshold}% / GPU {config.critical_gpu_threshold}%")
+            print(f"Full memory dumps: {'yes' if config.full_memory_dumps else 'no'}")
         except Exception as exc:
             print(f"Config load: failed ({exc})")
             return 1
@@ -69,21 +71,25 @@ def print_doctor_report(config_path: Path) -> int:
 
 
 def open_in_shell(path: Path) -> int:
-    if os.name != "nt":
-        print(path)
+    if os.name == "nt":
+        os.startfile(str(path))
         return 0
-    os.startfile(str(path))
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    if shutil.which(opener):
+        subprocess.Popen([opener, str(path)], cwd=str(ROOT_DIR))
+        return 0
+    print(path)
     return 0
 
 
 def launch_detached(config_path: Path) -> int:
-    if os.name != "nt":
-        print("Detached launch is only supported on Windows.", file=sys.stderr)
-        return 1
-
     command = build_watchdog_command(config_path)
-    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    subprocess.Popen(command, cwd=str(ROOT_DIR), creationflags=creationflags)
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        subprocess.Popen(command, cwd=str(ROOT_DIR), creationflags=creationflags)
+        return 0
+
+    subprocess.Popen(command, cwd=str(ROOT_DIR), start_new_session=True)
     return 0
 
 
@@ -95,10 +101,10 @@ def run_gui(config_path: Path) -> int:
         if not config_path.exists():
             messagebox.showerror("Shield Stopper", f"Config file not found:\n{config_path}")
             return
-        if os.name == "nt" and not is_windows_admin():
+        if not has_required_privileges():
             messagebox.showerror(
                 "Shield Stopper",
-                "Administrator rights are required.\nLaunch this GUI through run_shield.bat.",
+                "Elevated privileges are required.\nUse run_shield.bat on Windows or run_shield.sh on Linux/macOS.",
             )
             return
         try:
@@ -182,7 +188,7 @@ def capture_doctor_report(config_path: Path) -> list[str]:
         f"Config: {config_path}",
         f"Config exists: {'yes' if config_path.exists() else 'no'}",
         f"Platform: {os.name}",
-        f"Administrator: {'yes' if is_windows_admin() else 'no'}",
+        f"Privileges ready: {'yes' if has_required_privileges() else 'no'}",
         f"psutil installed: {'yes' if dependency_available('psutil') else 'no'}",
         f"pywin32 installed: {'yes' if dependency_available('win32gui') else 'no'}",
     ]
@@ -194,6 +200,7 @@ def capture_doctor_report(config_path: Path) -> list[str]:
                 f"Grace period: {config.grace_period_seconds}s",
                 f"Realtime thresholds: CPU {config.high_cpu_threshold}% / GPU {config.high_gpu_threshold}%",
                 f"Critical thresholds: CPU {config.critical_cpu_threshold}% / GPU {config.critical_gpu_threshold}%",
+                f"Full memory dumps: {'yes' if config.full_memory_dumps else 'no'}",
             ]
         )
     return lines

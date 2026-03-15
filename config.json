@@ -11,5 +11,6 @@
   "target_process_names": [],
   "excluded_process_names": [],
   "minidump_enabled": true,
-  "screenshot_enabled": true
+  "screenshot_enabled": true,
+  "full_memory_dumps": false
 }
